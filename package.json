@@ -17,6 +17,7 @@
   },
   "homepage": "https://github.com/minirobotdan/mongo-populate#readme",
   "dependencies": {
+    "json2mongo": "^2.0.0",
     "mongodb": "^3.0.0-rc0"
   }
 }
