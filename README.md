@@ -28,7 +28,7 @@ await db.seed(path.join(__dirname, 'json'))
 await db.seed(path.join(__dirname, 'json/single-collection.json'))
 
 // Data example
-await db.seed([{ _id: '5a129c0b42969849252f492e', foo: 'bar'}], 'crews')
+await db.seed([{ _id: '5a129c0b42969849252f492e', foo: 'bar'}], 'collection-name')
 ```
 
 ## Wishlist
