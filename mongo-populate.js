@@ -4,6 +4,9 @@ const fs = require('fs'),
     mongodb = require('mongodb'),
     MongoClient = require('mongodb').MongoClient;
 
+/**
+ * Async wrapper for fs.readfile
+ */
 async function readFileAsync(pathToFile) {
     return new Promise((resolve, reject) => {
         fs.readFile(pathToFile, async function (err, fileContents) {
@@ -16,6 +19,9 @@ async function readFileAsync(pathToFile) {
     });
 }
 
+/**
+ * Async wrapper for fs.readdir
+ */
 async function readFolderAsync(path) {
     return new Promise((resolve,reject) => {
         fs.readdir(path, function (err, files) {
@@ -28,9 +34,32 @@ async function readFolderAsync(path) {
     });
 }
 
+/**
+ * Asyncronously wrapper for fs.stat
+ */
+async function fsStatAsync(input) {
+    return new Promise((resolve, reject) => {
+        fs.stat(input, (err, stats) => {
+            if (err) {
+                reject(err);
+            } else {
+                resolve(stats);
+            }
+        });
+    });
+}
+
 class MongoPopulate {
 
-    constructor({ host, port = 27017, dbname, overwrite = false, verbose = false }) {
+    constructor({ 
+        host, 
+        port = 27017, 
+        dbname, 
+        username,
+        password,
+        overwrite = false, 
+        verbose = false 
+    }) {
 
         if (!host || !dbname) {
             throw new Error('No host name or database name provided');
@@ -39,24 +68,31 @@ class MongoPopulate {
         this.host = host;
         this.port = port;
         this.dbname = dbname;
+        this.username = username;
+        this.password = password;
         this.overwrite = overwrite;
         this.verbose = verbose;
         this.db = null;
+        this.connection = null;
     }
 
     /**
-     * 
+     * Promisify connection to ensure all calls to seed() begin with this.db being set correctly.
      */
     async connect() {
-        return new Promise((resolve, reject) => {
-            MongoClient.connect(`mongodb://${this.host}:${this.port}`, (err, connection) => {
-                if(err) {
-                    reject(err);
-                }
-                this.db = connection.db(this.dbname);
-                resolve();
-            });
-        });
+        let credentials = '';
+        if(this.username && this.password) {
+            credentials = `${this.username}:${this.password}@`;
+        }
+
+        try {
+            this.connection = await MongoClient.connect(`mongodb://${credentials}${this.host}:${this.port}`);
+        }
+        catch(err) {
+            throw err;
+        }
+        
+        this.db = this.connection.db(this.dbname);
     }
 
     /**
@@ -82,31 +118,18 @@ class MongoPopulate {
             }
         }
 
-        const seedDataType = await this.checkSeedDataType(seedData);
-
-        if (seedDataType.isDirectory()) {
-            return this.populateFromFolder(seedData);
-        } else if (seedDataType.isFile()) {
-            return this.readJsonFileAndInsert(null, seedData);
+        try {
+            const seedDataType = await fsStatAsync(seedData);
+            if (seedDataType.isDirectory()) {
+                return this.populateFromFolder(seedData);
+            } else if (seedDataType.isFile()) {
+                return this.readJsonFileAndInsert(null, seedData);
+            }
+        } catch(e) {
+            throw(e);
         }
-    }
-
-    /**
-     * Asyncronously return the result of fs.stat to verify
-     * @private
-     * @param seedData
-     * @return Promise<Stats>
-     */
-    async checkSeedDataType(seedData) {
-        return new Promise((resolve, reject) => {
-            fs.stat(seedData, (err, stats) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(stats);
-                }
-            });
-        });
+        
+        
     }
 
     /**
@@ -228,30 +251,30 @@ class MongoPopulate {
      * Handler for promise rejection based anticipated Mongo errors.
      * @param {MongoError|insertOneWriteOpResultObject} err 
      */
-    handleInsertion(results) {
+    async handleInsertion(results) {
         let finishedWithoutException = true,
-            skipCount = 0;
+            skipCount = 0,
+            close;
 
-        return new Promise((resolve, reject) => {
-            results.forEach(result => {
-                if(result instanceof Error && result.code === 11000) {
-                    skipCount++;
-                    if(this.verbose) {
-                        console.log(`Duplicate id found, skipping record. Full message: ${result.message}`);
-                    }
-                } else if (result instanceof Error) {
-                    finishedWithoutException = false;
-                    reject(result);
+        results.forEach(result => {
+            if(result instanceof Error && result.code === 11000) {
+                skipCount++;
+                if(this.verbose) {
+                    console.log(`Duplicate id found, skipping record. Full message: ${result.message}`);
                 }
-            });
-    
-            if(finishedWithoutException) {
-                if(!this.overwrite) {
-                    console.log(`Skipped ${skipCount} duplicate records`);
-                }
-                resolve(true);
+            } else if (result instanceof Error) {
+                finishedWithoutException = false;
+                throw(result);
             }
         });
+
+        if(finishedWithoutException) {
+            if(!this.overwrite) {
+                console.log(`Skipped ${skipCount} duplicate records`);
+            }
+            close = await this.connection.close();
+            return true;
+        }
     }
 
     /**
