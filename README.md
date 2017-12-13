@@ -37,5 +37,6 @@ This was written to fulfil an internal gap in tooling on a project, but I can se
 - More in depth MongoDB connection configuration (replica sets, SSL, connection pools, etc).
 - More fine grain control over creation of records (upserts, etc).
 - More logging options (pass in a log handler, Winston, etc).
+- Transpilation- Partly written as an exercise in async/await, but would be good to make it available to pre ES2017 projects without external transpilation required.
 - **Unit tests!** Sanity checked by hand for now, only used by myself for prototyping.
 
