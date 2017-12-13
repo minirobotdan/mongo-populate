@@ -1,7 +1,6 @@
 const fs = require('fs'),
     path = require('path'),
     j2m = require('json2mongo'),
-    mongodb = require('mongodb'),
     MongoClient = require('mongodb').MongoClient;
 
 /**
@@ -60,7 +59,6 @@ class MongoPopulate {
         overwrite = false, 
         verbose = false 
     }) {
-
         if (!host || !dbname) {
             throw new Error('No host name or database name provided');
         }
@@ -141,8 +139,6 @@ class MongoPopulate {
     async populateFromFolder(seedDataDir) {
 
         let promises = [],
-            drop, 
-            create,
             files;
 
         try {
@@ -153,7 +149,7 @@ class MongoPopulate {
     
         files.forEach(file => {
             if (path.extname(file) != '.json') {
-                reject(new Error('Please ensure all files are in JSON format'));
+                throw(new Error('Please ensure all files are in JSON format'));
             }
             promises.push(this.readJsonFileAndInsert(seedDataDir, file));
         });
@@ -169,15 +165,15 @@ class MongoPopulate {
      * @return Promise
      */
     async populateFromData(data, collectionName) {
-        let drop, create, collection, promises = [];
+        let collection, collectionExists;
 
         // Drop collection entirely to destroy all indexes, if overwrite specified.
-        if (me.overwrite) {
+        if (this.overwrite) {
             try {
-                collectionExists = await me.collectionExists(collectionName);
+                collectionExists = await this.collectionExists(collectionName);
                 if (collectionExists) {
-                    await me.db.dropCollection(collectionName);
-                    await me.db.createCollection(collectionName);
+                    await this.db.dropCollection(collectionName);
+                    await this.db.createCollection(collectionName);
                 }
             } catch(e) {
                 throw(e);
@@ -186,7 +182,7 @@ class MongoPopulate {
 
         collection = await this.db.collection(collectionName);
 
-        return me.insertRecords(data, collection);
+        return this.insertRecords(data, collection);
     }
 
     /**
@@ -223,7 +219,7 @@ class MongoPopulate {
         }
 
         if (!fileContents) {
-            reject(new Error(`File ${file} is empty`));
+            throw(new Error(`File ${file} is empty`));
         }
 
         // Drop collection entirely to destroy all indexes, if overwrite specified.
@@ -253,8 +249,7 @@ class MongoPopulate {
      */
     async handleInsertion(results) {
         let finishedWithoutException = true,
-            skipCount = 0,
-            close;
+            skipCount = 0;
 
         results.forEach(result => {
             if(result instanceof Error && result.code === 11000) {
@@ -272,7 +267,7 @@ class MongoPopulate {
             if(!this.overwrite) {
                 console.log(`Skipped ${skipCount} duplicate records`);
             }
-            close = await this.connection.close();
+            await this.connection.close();
             return true;
         }
     }
@@ -285,7 +280,7 @@ class MongoPopulate {
     async insertRecords(data, collection) {
         // Map all insertions to promise.
         let promises = data.map(record => {
-            return new Promise((resolve, reject) => {
+            return new Promise(resolve => {
                 collection.insert(record, { w: 1}, (err, result) => {
                     if(err) {
                         resolve(err);
