@@ -4,22 +4,59 @@ const fs = require('fs'),
     mongodb = require('mongodb'),
     MongoClient = require('mongodb').MongoClient;
 
+async function readFileAsync(pathToFile) {
+    return new Promise((resolve, reject) => {
+        fs.readFile(pathToFile, async function (err, fileContents) {
+            if(err) {
+                reject(err);
+            } else {
+                resolve(fileContents);
+            }
+        });
+    });
+}
+
+async function readFolderAsync(path) {
+    return new Promise((resolve,reject) => {
+        fs.readdir(path, function (err, files) {
+            if(err) {
+                reject(err);
+            } else {
+                resolve(files);
+            }
+        });
+    });
+}
+
 class MongoPopulate {
 
-    constructor({ host, port = 27017, dbname, overwrite = false }) {
+    constructor({ host, port = 27017, dbname, overwrite = false, verbose = false }) {
 
         if (!host || !dbname) {
             throw new Error('No host name or database name provided');
         }
 
+        this.host = host;
+        this.port = port;
+        this.dbname = dbname;
         this.overwrite = overwrite;
-        const connection = MongoClient.connect(`mongodb://${host}:${port}`, (err, connection) => {
-            if(err) {
-                throw(err);
-            }
-            this.db = connection.db(dbname);
+        this.verbose = verbose;
+        this.db = null;
+    }
+
+    /**
+     * 
+     */
+    async connect() {
+        return new Promise((resolve, reject) => {
+            MongoClient.connect(`mongodb://${this.host}:${this.port}`, (err, connection) => {
+                if(err) {
+                    reject(err);
+                }
+                this.db = connection.db(this.dbname);
+                resolve();
+            });
         });
-        
     }
 
     /**
@@ -35,6 +72,8 @@ class MongoPopulate {
      */
     async seed(seedData, collectionName) {
 
+        await this.connect();
+
         if (Array.isArray(seedData)) {
             if (!collectionName) {
                 throw new Error('Must provide a collection name if providing collection data as an array.');
@@ -48,7 +87,7 @@ class MongoPopulate {
         if (seedDataType.isDirectory()) {
             return this.populateFromFolder(seedData);
         } else if (seedDataType.isFile()) {
-            return this.populateFromFile(seedData);
+            return this.readJsonFileAndInsert(null, seedData);
         }
     }
 
@@ -71,15 +110,6 @@ class MongoPopulate {
     }
 
     /**
-     * Populate the mongodb collection from a file path
-     * @private
-     * @return Promise
-     */
-    async populateFromFile(seedDataFile) {
-        return this.readJsonFileAndInsert(null, seedDataFile);
-    }
-
-    /**
      * Populate the mongodb collection from a file folder
      * @private
      * @param seedDataDir The directory containing JSON collection files
@@ -88,42 +118,44 @@ class MongoPopulate {
     async populateFromFolder(seedDataDir) {
 
         let promises = [],
-            me = this,
-            drop, create;
+            drop, 
+            create,
+            files;
 
-        return new Promise((resolve,reject) => {
-            fs.readdir(seedDataDir, function (err, files) {
-                if (err) {
-                    throw err;
-                }
+        try {
+            files = await readFolderAsync(seedDataDir);
+        } catch(e) {
+            throw(e);
+        }
     
-                files.forEach(file => {
-                    if (path.extname(file) != '.json') {
-                        reject(new Error('Please ensure all files are in JSON format'));
-                    }
-                    promises.push(me.readJsonFileAndInsert(seedDataDir, file));
-                });
-                resolve(Promise.all(promises));
-            });
+        files.forEach(file => {
+            if (path.extname(file) != '.json') {
+                reject(new Error('Please ensure all files are in JSON format'));
+            }
+            promises.push(this.readJsonFileAndInsert(seedDataDir, file));
         });
+        
+        return Promise.all(promises);
     }
 
     /**
      * Populate the mongodb collection from collection data or array of collection data.
      * @private
-     * @param seedData An array of collection data
+     * @param data An array of collection data
      * @param collectionName The name of the collection to operate on.
      * @return Promise
      */
-    async populateFromData(seedData, collectionName) {
-        console.debug('Populate from data', seedData, collectionName);
-        let drop, create, collection;
+    async populateFromData(data, collectionName) {
+        let drop, create, collection, promises = [];
 
         // Drop collection entirely to destroy all indexes, if overwrite specified.
-        if (this.overwrite) {
+        if (me.overwrite) {
             try {
-                drop = await me.db.dropCollection(collectionName);
-                create = await me.db.createCollection(collectionName);
+                collectionExists = await me.collectionExists(collectionName);
+                if (collectionExists) {
+                    await me.db.dropCollection(collectionName);
+                    await me.db.createCollection(collectionName);
+                }
             } catch(e) {
                 throw(e);
             }
@@ -131,7 +163,7 @@ class MongoPopulate {
 
         collection = await this.db.collection(collectionName);
 
-        return await collection.insertMany(seedData, { w: 1 });
+        return me.insertRecords(data, collection);
     }
 
     /**
@@ -153,37 +185,94 @@ class MongoPopulate {
 
     async readJsonFileAndInsert(seedDataDir, file) {
         
-        const me = this;
-        const pathToFile = seedDataDir ? path.join(seedDataDir, file) : file;
+        const me = this,
+            pathToFile = seedDataDir ? path.join(seedDataDir, file) : file,
+            collectionName = path.basename(file, '.json');
+
+        let collection, 
+            collectionExists,
+            fileContents; 
+            
+        try {
+            fileContents = await readFileAsync(pathToFile);
+        } catch(e) {
+            throw(e);
+        }
+
+        if (!fileContents) {
+            reject(new Error(`File ${file} is empty`));
+        }
+
+        // Drop collection entirely to destroy all indexes, if overwrite specified.
+        if (me.overwrite) {
+            try {
+                collectionExists = await me.collectionExists(collectionName);
+                if (collectionExists) {
+                    await me.db.dropCollection(collectionName);
+                    await me.db.createCollection(collectionName);
+                }
+            } catch(e) {
+                throw(e);
+            }
+        }
+
+        collection = await me.db.collection(collectionName);
+
+        let data = j2m(JSON.parse(fileContents));
+        
+        return me.insertRecords(data, collection);
+            
+    }
+
+    /**
+     * Handler for promise rejection based anticipated Mongo errors.
+     * @param {MongoError|insertOneWriteOpResultObject} err 
+     */
+    handleInsertion(results) {
+        let finishedWithoutException = true,
+            skipCount = 0;
 
         return new Promise((resolve, reject) => {
-            fs.readFile(pathToFile, async function (err, data) {
-                let collectionName = path.basename(file, '.json'), 
-                    collection, collectionExists;
-    
-                if (err || !data) {
-                    reject(err || new Error(`File ${file} is empty`));
-                }
-    
-                // Drop collection entirely to destroy all indexes, if overwrite specified.
-                if (me.overwrite) {
-                    try {
-                        collectionExists = await me.collectionExists(collectionName);
-                        if (collectionExists) {
-                            await me.db.dropCollection(collectionName);
-                            await me.db.createCollection(collectionName);
-                        }
-                    } catch(e) {
-                        throw(e);
+            results.forEach(result => {
+                if(result instanceof Error && result.code === 11000) {
+                    skipCount++;
+                    if(this.verbose) {
+                        console.log(`Duplicate id found, skipping record. Full message: ${result.message}`);
                     }
+                } else if (result instanceof Error) {
+                    finishedWithoutException = false;
+                    reject(result);
                 }
-    
-                collection = await me.db.collection(collectionName);
-    
-                let content = j2m(JSON.parse(data));
-                resolve(collection.insertMany(content, { w: 1 }));
             });
+    
+            if(finishedWithoutException) {
+                if(!this.overwrite) {
+                    console.log(`Skipped ${skipCount} duplicate records`);
+                }
+                resolve(true);
+            }
         });
+    }
+
+    /**
+     * 
+     * @param {Record[]} data 
+     * @param {MongoCollection} collection 
+     */
+    async insertRecords(data, collection) {
+        // Map all insertions to promise.
+        let promises = data.map(record => {
+            return new Promise((resolve, reject) => {
+                collection.insert(record, { w: 1}, (err, result) => {
+                    if(err) {
+                        resolve(err);
+                    } else {
+                        resolve(result);
+                    }
+                });
+            }); 
+        });
+        return Promise.all(promises).then(this.handleInsertion.bind(this));
     }
 }
 

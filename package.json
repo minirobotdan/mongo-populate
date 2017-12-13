@@ -1,8 +1,8 @@
 {
   "name": "mongo-populate",
   "version": "1.0.0",
-  "description": "A small, modern, asynchronous library for seeding a MongoDB database with data.",
-  "main": "index.js",
+  "description": "A small, modern, ES2017 async library for seeding a MongoDB database with data.",
+  "main": "mongo-populate.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
